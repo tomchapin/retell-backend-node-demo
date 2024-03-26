@@ -1,13 +1,140 @@
 import OpenAI from "openai";
+import {
+  ChatRequestMessage,
+  GetChatCompletionsOptions,
+  ChatCompletionsFunctionToolDefinition,
+} from "@azure/openai";
+
+import util from 'util';
+
+import {
+  ChatCompletionMessage,
+  ChatCompletionChunk,
+  ChatCompletionMessageParam,
+} from 'openai/resources/chat';
+
 import { WebSocket } from "ws";
 import { RetellRequest, RetellResponse, Utterance } from "./types";
 
+
+//Step 1: Define the structure to parse openAI function calling result to our data model
+export interface FunctionCall {
+  id: string;
+  funcName: string;
+  arguments: Record<string, any>;
+  result?: string;
+}
+
+const db = [
+  {
+    id: 'a1',
+    name: 'To Kill a Mockingbird',
+    genre: 'historical',
+    description: `Compassionate, dramatic, and deeply moving, "To Kill A Mockingbird" takes readers to the roots of human behavior - to innocence and experience, kindness and cruelty, love and hatred, humor and pathos. Now with over 18 million copies in print and translated into forty languages, this regional story by a young Alabama woman claims universal appeal. Harper Lee always considered her book to be a simple love story. Today it is regarded as a masterpiece of American literature.`,
+  },
+  {
+    id: 'a2',
+    name: 'All the Light We Cannot See',
+    genre: 'historical',
+    description: `In a mining town in Germany, Werner Pfennig, an orphan, grows up with his younger sister, enchanted by a crude radio they find that brings them news and stories from places they have never seen or imagined. Werner becomes an expert at building and fixing these crucial new instruments and is enlisted to use his talent to track down the resistance. Deftly interweaving the lives of Marie-Laure and Werner, Doerr illuminates the ways, against all odds, people try to be good to one another.`,
+  },
+  {
+    id: 'a3',
+    name: 'Where the Crawdads Sing',
+    genre: 'historical',
+    description: `For years, rumors of the “Marsh Girl” haunted Barkley Cove, a quiet fishing village. Kya Clark is barefoot and wild; unfit for polite society. So in late 1969, when the popular Chase Andrews is found dead, locals immediately suspect her.
+
+But Kya is not what they say. A born naturalist with just one day of school, she takes life's lessons from the land, learning the real ways of the world from the dishonest signals of fireflies. But while she has the skills to live in solitude forever, the time comes when she yearns to be touched and loved. Drawn to two young men from town, who are each intrigued by her wild beauty, Kya opens herself to a new and startling world—until the unthinkable happens.`,
+  },
+];
+
+const functions: OpenAI.Chat.ChatCompletionCreateParams.Function[] = [
+  {
+    name: 'list',
+    description: 'list queries books by genre, and returns a list of names of books',
+    parameters: {
+      type: 'object',
+      properties: {
+        genre: { type: 'string', enum: ['mystery', 'nonfiction', 'memoir', 'romance', 'historical'] },
+      },
+    },
+  },
+  {
+    name: 'search',
+    description: 'search queries books by their name and returns a list of book names and their ids',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'get',
+    description:
+      "get returns a book's detailed information based on the id of the book. Note that this does not accept names, and only IDs, which you can get by using search.",
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+      },
+    },
+  },
+];
+
+async function list(genre: string) {
+  return db.filter((item) => item.genre === genre).map((item) => ({ name: item.name, id: item.id }));
+}
+
+async function search(name: string) {
+  return db.filter((item) => item.name.includes(name)).map((item) => ({ name: item.name, id: item.id }));
+}
+
+async function get(id: string) {
+  return db.find((item) => item.id === id)!;
+}
+
+async function callFunction(function_call: ChatCompletionMessage.FunctionCall): Promise<any> {
+  const args = JSON.parse(function_call.arguments!);
+  switch (function_call.name) {
+    case 'list':
+      return await list(args['genre']);
+
+    case 'search':
+      return await search(args['name']);
+
+    case 'get':
+      return await get(args['id']);
+
+    default:
+      throw new Error('No function found');
+  }
+}
+
+function messageReducer(previous: ChatCompletionMessage, item: ChatCompletionChunk): ChatCompletionMessage {
+  const reduce = (acc: any, delta: any) => {
+    acc = { ...acc };
+    for (const [key, value] of Object.entries(delta)) {
+      if (acc[key] === undefined || acc[key] === null) {
+        acc[key] = value;
+      } else if (typeof acc[key] === 'string' && typeof value === 'string') {
+        (acc[key] as string) += value;
+      } else if (typeof acc[key] === 'object' && !Array.isArray(acc[key])) {
+        acc[key] = reduce(acc[key], value);
+      }
+    }
+    return acc;
+  };
+
+  return reduce(previous, item.choices[0]!.delta) as ChatCompletionMessage;
+}
+
 // Define the greeting message of the agent. If you don't want the agent speak first, set to empty string ""
 const beginSentence =
-  "Hey there, I'm your personal AI therapist, how can I help you?";
+  "Hey there, I'm your personal AI librarian, what book can I find for you?";
 // Your agent prompt.
 const agentPrompt =
-  "Task: As a professional therapist, your responsibilities are comprehensive and patient-centered. You establish a positive and trusting rapport with patients, diagnosing and treating mental health disorders. Your role involves creating tailored treatment plans based on individual patient needs and circumstances. Regular meetings with patients are essential for providing counseling and treatment, and for adjusting plans as needed. You conduct ongoing assessments to monitor patient progress, involve and advise family members when appropriate, and refer patients to external specialists or agencies if required. Keeping thorough records of patient interactions and progress is crucial. You also adhere to all safety protocols and maintain strict client confidentiality. Additionally, you contribute to the practice's overall success by completing related tasks as needed.\n\nConversational Style: Communicate concisely and conversationally. Aim for responses in short, clear prose, ideally under 10 words. This succinct approach helps in maintaining clarity and focus during patient interactions.\n\nPersonality: Your approach should be empathetic and understanding, balancing compassion with maintaining a professional stance on what is best for the patient. It's important to listen actively and empathize without overly agreeing with the patient, ensuring that your professional opinion guides the therapeutic process.";
+  "You are a friendly AI agent that helps users find books. You can list books by genre, search for books by name, and get detailed information about a book by its ID. You can also provide recommendations based on the user's preferences. You should be helpful, engaging, and knowledgeable about books. Remember to ask follow-up questions to keep the conversation going. Let's start!";
 
 export class DemoLlmClient {
   private client: OpenAI;
@@ -31,6 +158,7 @@ export class DemoLlmClient {
    * @param {WebSocket} ws - The WebSocket connection through which the message is sent.
    */
   BeginMessage(ws: WebSocket) {
+    console.log("Retell said:", beginSentence);
     const res: RetellResponse = {
       response_id: 0, // Indicates the start of the conversation
       content: beginSentence, // The initial greeting message defined earlier
@@ -94,6 +222,7 @@ export class DemoLlmClient {
     for (const message of transcript) {
       requestMessages.push(message);
     }
+
     // If the interaction type is "reminder_required", add a special instruction for the AI to prompt a reminder.
     if (request.interaction_type === "reminder_required") {
       // Change this content if you want a different reminder message
@@ -102,9 +231,35 @@ export class DemoLlmClient {
         content: "(Now the user has not responded in a while, you would say:)",
       });
     }
+
     // Return the array of request messages, ready to be sent to the OpenAI Chat API.
     return requestMessages;
   }
+
+  // // Step 2: Prepare the function calling definition to the prompt
+  // private PrepareFunctions(): ChatCompletionsFunctionToolDefinition[] {
+  //   let functions: ChatCompletionsFunctionToolDefinition[] = [
+  //     {
+  //       type: "function",
+  //       function: {
+  //         name: "end_call",
+  //         description: "End the call only when user explicitly requests it.",
+  //         parameters: {
+  //           type: "object",
+  //           properties: {
+  //             message: {
+  //               type: "string",
+  //               description:
+  //                 "The message you will say before ending the call with the customer.",
+  //             },
+  //           },
+  //           required: ["message"],
+  //         },
+  //       },
+  //     },
+  //   ];
+  //   return functions;
+  // }
 
   /**
    * Asynchronously drafts a response based on the RetellRequest object and sends it through a WebSocket.
@@ -135,7 +290,11 @@ export class DemoLlmClient {
     // Prepare the prompt for the OpenAI API based on the request.
     const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = this.PreparePrompt(request);
 
+    let funcCall = null;
+    let executeFunction = false;
+
     try {
+
       // Create a chat completion request to the OpenAI API with the prepared messages.
       const events = await this.client.chat.completions.create({
         model: "gpt-3.5-turbo-1106", // Specify the model to use.
@@ -144,27 +303,53 @@ export class DemoLlmClient {
         temperature: 0.3, // Set the creativity of the response.
         frequency_penalty: 1, // Penalize new tokens based on their frequency.
         max_tokens: 200, // Limit the maximum number of tokens in the response.
+        functions: functions,
       });
+
+      let message = {} as ChatCompletionMessage;
 
       // Process each event received from the OpenAI API.
       for await (const event of events) {
+        message = messageReducer(message, event);
+        
+        // console.log("Event:", util.inspect(event, false, null, true /* enable colors */) );
+
         // Check if the event contains at least one choice with content.
         if (event.choices.length >= 1) {
-          let delta = event.choices[0].delta;
-          // Skip if the choice does not contain any content.
-          if (!delta || !delta.content) continue;
+          let finish_reason = event.choices[0].finish_reason;
 
-          completeMessage += delta.content; // Accumulate the content parts.
+          console.log("finish_reason: ", finish_reason);
 
-          // Prepare the response object with the content received from the API.
-          const res: RetellResponse = {
-            response_id: request.response_id,
-            content: delta.content,
-            content_complete: false,
-            end_call: false,
-          };
-          // Send the response back through the WebSocket.
-          ws.send(JSON.stringify(res));
+          if (finish_reason == 'function_call') {
+            console.log("Function call: ", message);
+            funcCall = message.function_call;
+            executeFunction = true;
+
+          } else {
+            
+            // Extract the content delta from the first choice in the event.
+            let delta = event.choices[0].delta;
+
+            // Skip if the choice does not contain any content.
+            if (!delta || !delta.content) {
+              console.log("No content in delta. Skipping.")
+              continue;
+            }
+  
+            completeMessage += delta.content; // Accumulate the content parts.
+  
+            // Prepare the response object with the content received from the API.
+            const res: RetellResponse = {
+              response_id: request.response_id,
+              content: delta.content,
+              content_complete: false,
+              end_call: false,
+            };
+            // Send the response back through the WebSocket.
+            ws.send(JSON.stringify(res));
+
+          }
+
         }
       }
 
@@ -173,17 +358,36 @@ export class DemoLlmClient {
       console.error("Error in gpt stream: ", err);
     } finally {
 
-      // After the loop, print the complete message.
-      console.log("LLM said:", completeMessage);
+      if(funcCall) {
+        console.log("Function call: ", funcCall);
+        const result = await callFunction(funcCall);
+        console.log("Function call result: ", result);
 
-      // Send a final response indicating that the content is complete.
-      const res: RetellResponse = {
-        response_id: request.response_id,
-        content: "",
-        content_complete: true,
-        end_call: false,
-      };
-      ws.send(JSON.stringify(res));
+        // Prepare the response object with the content received from the API.
+        const res: RetellResponse = {
+          response_id: request.response_id,
+          content: "The function call result is: " + JSON.stringify(result),
+          content_complete: false,
+          end_call: false,
+        };
+        // Send the response back through the WebSocket.
+        ws.send(JSON.stringify(res));
+
+      } else{
+        // After the loop, print the complete message.
+        console.log("LLM said:", completeMessage);
+
+        // Send a final response indicating that the content is complete.
+        const res: RetellResponse = {
+          response_id: request.response_id,
+          content: "",
+          content_complete: true,
+          end_call: false,
+        };
+        ws.send(JSON.stringify(res));
+      }
+
+
     }
   }
 }
