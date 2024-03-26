@@ -72,7 +72,7 @@ export class DemoLlmClient {
   }
 
   async DraftResponse(request: RetellRequest, ws: WebSocket) {
-    console.clear();
+    // console.clear();
     console.log("reqOR", request);
 
     if (request.interaction_type === "update_only") {

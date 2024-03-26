@@ -126,6 +126,8 @@ export class TwilioClient {
     app.post(
       "/twilio-voice-webhook/:agent_id",
       async (req: Request, res: Response) => {
+        console.log(req.body);
+        console.log(req.params);
         const agentId = req.params.agent_id;
         const answeredBy = req.body.AnsweredBy;
         try {

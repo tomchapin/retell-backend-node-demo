@@ -157,7 +157,7 @@ export class FunctionCallingLlmClient {
     ws: WebSocket,
     funcResult?: FunctionCall,
   ) {
-    console.clear();
+    // console.clear();
     console.log("req", request);
 
     if (request.interaction_type === "update_only") {

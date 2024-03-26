@@ -11,6 +11,7 @@ const agentPrompt =
 
 export class DemoLlmClient {
   private client: OpenAI;
+  private lastPrintedUserMessage: string | null = null;
 
   constructor() {
     this.client = new OpenAI({
@@ -19,35 +20,66 @@ export class DemoLlmClient {
     });
   }
 
-  // First sentence requested
+  /**
+   * Sends the initial greeting message to the user through the WebSocket connection.
+   * This method is responsible for constructing the initial message that the AI agent
+   * will send to the user. It uses the predefined `beginSentence` as the content of the message.
+   * The `response_id` is set to 0 to indicate the start of the conversation.
+   * `content_complete` is marked true to signify that the AI has completed its current thought
+   * and is ready for user input. `end_call` is set to false indicating the conversation is ongoing.
+   * 
+   * @param {WebSocket} ws - The WebSocket connection through which the message is sent.
+   */
   BeginMessage(ws: WebSocket) {
     const res: RetellResponse = {
-      response_id: 0,
-      content: beginSentence,
-      content_complete: true,
-      end_call: false,
+      response_id: 0, // Indicates the start of the conversation
+      content: beginSentence, // The initial greeting message defined earlier
+      content_complete: true, // Signifies the AI has completed its message
+      end_call: false, // Indicates the conversation is not yet over
     };
-    ws.send(JSON.stringify(res));
+    ws.send(JSON.stringify(res)); // Sends the constructed message as a JSON string through the WebSocket
   }
 
-  // Depend on your LLM, you need to parse the conversation to
-  // {
-  //   role: 'assistant'/"user",
-  //   content: 'the_content'
-  // }
+  /**
+   * Converts a conversation history into a format suitable for OpenAI's Chat API.
+   * This method takes an array of Utterance objects, representing the turns in a conversation,
+   * and transforms them into a format that the OpenAI Chat API can understand.
+   * 
+   * Each Utterance object has a role ('agent' or 'user') and a content string. In the resulting
+   * format, the 'agent' role is mapped to 'assistant' and the 'user' role remains unchanged.
+   * This mapping is necessary because the OpenAI Chat API expects roles to be specified as
+   * either 'assistant' or 'user'.
+   * 
+   * @param {Utterance[]} conversation - An array of Utterance objects representing the conversation history.
+   * @returns {OpenAI.Chat.Completions.ChatCompletionMessageParam[]} An array of objects formatted for the OpenAI Chat API,
+   *          where each object contains a 'role' ('assistant' or 'user') and the original 'content' string.
+   */
   private ConversationToChatRequestMessages(conversation: Utterance[]) {
     let result: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
     for (let turn of conversation) {
       result.push({
-        role: turn.role === "agent" ? "assistant" : "user",
-        content: turn.content,
+        role: turn.role === "agent" ? "assistant" : "user", // Map 'agent' role to 'assistant' for OpenAI API compatibility
+        content: turn.content, // Preserve the original content of the conversation turn
       });
     }
-    return result;
+    return result; // Return the transformed conversation history
   }
 
+  /**
+   * Prepares the prompt for the OpenAI Chat API based on the request and interaction type.
+   * This method constructs a series of messages that will be sent to the OpenAI Chat API to generate a response.
+   * The messages include a system-level instruction for the AI, the conversation history, and any special instructions
+   * based on the interaction type (e.g., if a reminder is needed).
+   * 
+   * @param {RetellRequest} request - The request object containing the transcript and interaction type.
+   * @returns {OpenAI.Chat.Completions.ChatCompletionMessageParam[]} An array of ChatCompletionMessageParam objects
+   *          formatted for the OpenAI Chat API. This includes the system message with the agent's role and guidelines,
+   *          followed by the conversation history, and any additional instructions based on the interaction type.
+   */
   private PreparePrompt(request: RetellRequest) {
+    // Convert the conversation transcript into a format suitable for the OpenAI Chat API.
     let transcript = this.ConversationToChatRequestMessages(request.transcript);
+    // Initialize the request messages array with a system-level message that includes the agent's role and guidelines.
     let requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
       [
         {
@@ -58,9 +90,11 @@ export class DemoLlmClient {
             agentPrompt,
         },
       ];
+    // Add the conversation history to the request messages.
     for (const message of transcript) {
       requestMessages.push(message);
     }
+    // If the interaction type is "reminder_required", add a special instruction for the AI to prompt a reminder.
     if (request.interaction_type === "reminder_required") {
       // Change this content if you want a different reminder message
       requestMessages.push({
@@ -68,45 +102,81 @@ export class DemoLlmClient {
         content: "(Now the user has not responded in a while, you would say:)",
       });
     }
+    // Return the array of request messages, ready to be sent to the OpenAI Chat API.
     return requestMessages;
   }
 
+  /**
+   * Asynchronously drafts a response based on the RetellRequest object and sends it through a WebSocket.
+   * This method checks the interaction type of the request, prepares the prompt for the OpenAI API,
+   * sends the request to the OpenAI API, and then sends the response back through the WebSocket.
+   * 
+   * @param {RetellRequest} request - The request object containing the transcript and interaction type.
+   * @param {WebSocket} ws - The WebSocket connection to send the response through.
+   */
   async DraftResponse(request: RetellRequest, ws: WebSocket) {
-    console.clear();
+    // Find the last user message in the transcript
+    const lastUserMessage = request.transcript.filter(utterance => utterance.role === "user").pop();
 
+    // Check if the last user message is different from the last printed one
+    if (lastUserMessage && lastUserMessage.content !== this.lastPrintedUserMessage) {
+      console.log("User said: ", lastUserMessage.content);
+      this.lastPrintedUserMessage = lastUserMessage.content; // Update the last printed message
+    }
+
+    let completeMessage = ""; // Initialize an empty string to accumulate the message parts.
+
+    // Skip processing if the interaction type is "update_only", as no response is required.
     if (request.interaction_type === "update_only") {
       // process live transcript update if needed
       return;
     }
-    const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
-      this.PreparePrompt(request);
+
+    // Prepare the prompt for the OpenAI API based on the request.
+    const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = this.PreparePrompt(request);
 
     try {
+      // Create a chat completion request to the OpenAI API with the prepared messages.
       const events = await this.client.chat.completions.create({
-        model: "gpt-3.5-turbo-1106",
-        messages: requestMessages,
-        stream: true,
-        temperature: 0.3,
-        frequency_penalty: 1,
-        max_tokens: 200,
+        model: "gpt-3.5-turbo-1106", // Specify the model to use.
+        messages: requestMessages, // Pass the prepared messages for the chat.
+        stream: true, // Enable streaming to receive responses as they're generated.
+        temperature: 0.3, // Set the creativity of the response.
+        frequency_penalty: 1, // Penalize new tokens based on their frequency.
+        max_tokens: 200, // Limit the maximum number of tokens in the response.
       });
 
+      // Process each event received from the OpenAI API.
       for await (const event of events) {
+        // Check if the event contains at least one choice with content.
         if (event.choices.length >= 1) {
           let delta = event.choices[0].delta;
+          // Skip if the choice does not contain any content.
           if (!delta || !delta.content) continue;
+
+          completeMessage += delta.content; // Accumulate the content parts.
+
+          // Prepare the response object with the content received from the API.
           const res: RetellResponse = {
             response_id: request.response_id,
             content: delta.content,
             content_complete: false,
             end_call: false,
           };
+          // Send the response back through the WebSocket.
           ws.send(JSON.stringify(res));
         }
       }
+
     } catch (err) {
+      // Log any errors encountered during the API request.
       console.error("Error in gpt stream: ", err);
     } finally {
+
+      // After the loop, print the complete message.
+      console.log("LLM said:", completeMessage);
+
+      // Send a final response indicating that the content is complete.
       const res: RetellResponse = {
         response_id: request.response_id,
         content: "",
