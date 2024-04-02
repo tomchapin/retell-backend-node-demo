@@ -5,17 +5,16 @@ import {
   ChatCompletionsFunctionToolDefinition,
 } from "@azure/openai";
 
-import util from 'util';
+import util from "util";
 
 import {
   ChatCompletionMessage,
   ChatCompletionChunk,
   ChatCompletionMessageParam,
-} from 'openai/resources/chat';
+} from "openai/resources/chat";
 
 import { WebSocket } from "ws";
 import { RetellRequest, RetellResponse, Utterance } from "./types";
-
 
 //Step 1: Define the structure to parse openAI function calling result to our data model
 export interface FunctionCall {
@@ -27,21 +26,21 @@ export interface FunctionCall {
 
 const db = [
   {
-    id: 'a1',
-    name: 'To Kill a Mockingbird',
-    genre: 'historical',
+    id: "a1",
+    name: "To Kill a Mockingbird",
+    genre: "historical",
     description: `Compassionate, dramatic, and deeply moving, "To Kill A Mockingbird" takes readers to the roots of human behavior - to innocence and experience, kindness and cruelty, love and hatred, humor and pathos. Now with over 18 million copies in print and translated into forty languages, this regional story by a young Alabama woman claims universal appeal. Harper Lee always considered her book to be a simple love story. Today it is regarded as a masterpiece of American literature.`,
   },
   {
-    id: 'a2',
-    name: 'All the Light We Cannot See',
-    genre: 'historical',
+    id: "a2",
+    name: "All the Light We Cannot See",
+    genre: "historical",
     description: `In a mining town in Germany, Werner Pfennig, an orphan, grows up with his younger sister, enchanted by a crude radio they find that brings them news and stories from places they have never seen or imagined. Werner becomes an expert at building and fixing these crucial new instruments and is enlisted to use his talent to track down the resistance. Deftly interweaving the lives of Marie-Laure and Werner, Doerr illuminates the ways, against all odds, people try to be good to one another.`,
   },
   {
-    id: 'a3',
-    name: 'Where the Crawdads Sing',
-    genre: 'historical',
+    id: "a3",
+    name: "Where the Crawdads Sing",
+    genre: "historical",
     description: `For years, rumors of the “Marsh Girl” haunted Barkley Cove, a quiet fishing village. Kya Clark is barefoot and wild; unfit for polite society. So in late 1969, when the popular Chase Andrews is found dead, locals immediately suspect her.
 
 But Kya is not what they say. A born naturalist with just one day of school, she takes life's lessons from the land, learning the real ways of the world from the dishonest signals of fireflies. But while she has the skills to live in solitude forever, the time comes when she yearns to be touched and loved. Drawn to two young men from town, who are each intrigued by her wild beauty, Kya opens herself to a new and startling world—until the unthinkable happens.`,
@@ -50,76 +49,90 @@ But Kya is not what they say. A born naturalist with just one day of school, she
 
 const functions: OpenAI.Chat.ChatCompletionCreateParams.Function[] = [
   {
-    name: 'list',
-    description: 'list queries books by genre, and returns a list of names of books',
+    name: "list",
+    description:
+      "list queries books by genre, and returns a list of names of books",
     parameters: {
-      type: 'object',
+      type: "object",
       properties: {
-        genre: { type: 'string', enum: ['mystery', 'nonfiction', 'memoir', 'romance', 'historical'] },
+        genre: {
+          type: "string",
+          enum: ["mystery", "nonfiction", "memoir", "romance", "historical"],
+        },
       },
     },
   },
   {
-    name: 'search',
-    description: 'search queries books by their name and returns a list of book names and their ids',
+    name: "search",
+    description:
+      "search queries books by their name and returns a list of book names and their ids",
     parameters: {
-      type: 'object',
+      type: "object",
       properties: {
-        name: { type: 'string' },
+        name: { type: "string" },
       },
     },
   },
   {
-    name: 'get',
+    name: "get",
     description:
       "get returns a book's detailed information based on the id of the book. Note that this does not accept names, and only IDs, which you can get by using search.",
     parameters: {
-      type: 'object',
+      type: "object",
       properties: {
-        id: { type: 'string' },
+        id: { type: "string" },
       },
     },
   },
 ];
 
 async function list(genre: string) {
-  return db.filter((item) => item.genre === genre).map((item) => ({ name: item.name, id: item.id }));
+  return db
+    .filter((item) => item.genre === genre)
+    .map((item) => ({ name: item.name, id: item.id }));
 }
 
 async function search(name: string) {
-  return db.filter((item) => item.name.includes(name)).map((item) => ({ name: item.name, id: item.id }));
+  return db
+    .filter((item) => item.name.includes(name))
+    .map((item) => ({ name: item.name, id: item.id }));
 }
 
 async function get(id: string) {
   return db.find((item) => item.id === id)!;
 }
 
-async function callFunction(function_call: ChatCompletionMessage.FunctionCall): Promise<any> {
+async function callFunction(
+  function_call: ChatCompletionMessage.FunctionCall,
+): Promise<any> {
   const args = JSON.parse(function_call.arguments!);
   switch (function_call.name) {
-    case 'list':
-      return await list(args['genre']);
+    case "list":
+      return await list(args["genre"]);
 
-    case 'search':
-      return await search(args['name']);
+    case "search":
+      return await search(args["name"]);
 
-    case 'get':
-      return await get(args['id']);
+    case "get":
+      return await get(args["id"]);
 
     default:
-      throw new Error('No function found');
+      throw new Error("No function found");
   }
 }
 
-function messageReducer(previous: ChatCompletionMessage, item: ChatCompletionChunk): ChatCompletionMessage {
+function messageReducer(
+  previous: ChatCompletionMessage,
+  item: ChatCompletionChunk,
+): ChatCompletionMessage {
   const reduce = (acc: any, delta: any) => {
     acc = { ...acc };
     for (const [key, value] of Object.entries(delta)) {
       if (acc[key] === undefined || acc[key] === null) {
         acc[key] = value;
-      } else if (typeof acc[key] === 'string' && typeof value === 'string') {
+      } else if (typeof acc[key] === "string" && typeof value === "string") {
         (acc[key] as string) += value;
-      } else if (typeof acc[key] === 'object' && !Array.isArray(acc[key])) {
+      } else if (typeof acc[key] === "object" && !Array.isArray(acc[key])) {
         acc[key] = reduce(acc[key], value);
       }
     }
@@ -154,7 +167,7 @@ export class DemoLlmClient {
    * The `response_id` is set to 0 to indicate the start of the conversation.
    * `content_complete` is marked true to signify that the AI has completed its current thought
    * and is ready for user input. `end_call` is set to false indicating the conversation is ongoing.
-   * 
+   *
    * @param {WebSocket} ws - The WebSocket connection through which the message is sent.
    */
   BeginMessage(ws: WebSocket) {
@@ -172,12 +185,12 @@ export class DemoLlmClient {
    * Converts a conversation history into a format suitable for OpenAI's Chat API.
    * This method takes an array of Utterance objects, representing the turns in a conversation,
    * and transforms them into a format that the OpenAI Chat API can understand.
-   * 
+   *
    * Each Utterance object has a role ('agent' or 'user') and a content string. In the resulting
    * format, the 'agent' role is mapped to 'assistant' and the 'user' role remains unchanged.
    * This mapping is necessary because the OpenAI Chat API expects roles to be specified as
    * either 'assistant' or 'user'.
-   * 
+   *
    * @param {Utterance[]} conversation - An array of Utterance objects representing the conversation history.
    * @returns {OpenAI.Chat.Completions.ChatCompletionMessageParam[]} An array of objects formatted for the OpenAI Chat API,
    *          where each object contains a 'role' ('assistant' or 'user') and the original 'content' string.
@@ -198,7 +211,7 @@ export class DemoLlmClient {
    * This method constructs a series of messages that will be sent to the OpenAI Chat API to generate a response.
    * The messages include a system-level instruction for the AI, the conversation history, and any special instructions
    * based on the interaction type (e.g., if a reminder is needed).
-   * 
+   *
    * @param {RetellRequest} request - The request object containing the transcript and interaction type.
    * @returns {OpenAI.Chat.Completions.ChatCompletionMessageParam[]} An array of ChatCompletionMessageParam objects
    *          formatted for the OpenAI Chat API. This includes the system message with the agent's role and guidelines,
@@ -265,16 +278,21 @@ export class DemoLlmClient {
    * Asynchronously drafts a response based on the RetellRequest object and sends it through a WebSocket.
    * This method checks the interaction type of the request, prepares the prompt for the OpenAI API,
    * sends the request to the OpenAI API, and then sends the response back through the WebSocket.
-   * 
+   *
    * @param {RetellRequest} request - The request object containing the transcript and interaction type.
    * @param {WebSocket} ws - The WebSocket connection to send the response through.
    */
   async DraftResponse(request: RetellRequest, ws: WebSocket) {
     // Find the last user message in the transcript
-    const lastUserMessage = request.transcript.filter(utterance => utterance.role === "user").pop();
+    const lastUserMessage = request.transcript
+      .filter((utterance) => utterance.role === "user")
+      .pop();
 
     // Check if the last user message is different from the last printed one
-    if (lastUserMessage && lastUserMessage.content !== this.lastPrintedUserMessage) {
+    if (
+      lastUserMessage &&
+      lastUserMessage.content !== this.lastPrintedUserMessage
+    ) {
       console.log("User said: ", lastUserMessage.content);
       this.lastPrintedUserMessage = lastUserMessage.content; // Update the last printed message
     }
@@ -288,13 +306,13 @@ export class DemoLlmClient {
     }
 
     // Prepare the prompt for the OpenAI API based on the request.
-    const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = this.PreparePrompt(request);
+    const requestMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] =
+      this.PreparePrompt(request);
 
     let funcCall = null;
     let executeFunction = false;
 
     try {
-
       // Create a chat completion request to the OpenAI API with the prepared messages.
       const events = await this.client.chat.completions.create({
         model: "gpt-3.5-turbo-1106", // Specify the model to use.
@@ -311,7 +329,7 @@ export class DemoLlmClient {
       // Process each event received from the OpenAI API.
       for await (const event of events) {
         message = messageReducer(message, event);
-        
+
         // console.log("Event:", util.inspect(event, false, null, true /* enable colors */) );
 
         // Check if the event contains at least one choice with content.
@@ -320,24 +338,22 @@ export class DemoLlmClient {
 
           console.log("finish_reason: ", finish_reason);
 
-          if (finish_reason == 'function_call') {
+          if (finish_reason == "function_call") {
             console.log("Function call: ", message);
             funcCall = message.function_call;
             executeFunction = true;
-
           } else {
-            
             // Extract the content delta from the first choice in the event.
             let delta = event.choices[0].delta;
 
             // Skip if the choice does not contain any content.
             if (!delta || !delta.content) {
-              console.log("No content in delta. Skipping.")
+              console.log("No content in delta. Skipping.");
               continue;
             }
-  
+
             completeMessage += delta.content; // Accumulate the content parts.
-  
+
             // Prepare the response object with the content received from the API.
             const res: RetellResponse = {
               response_id: request.response_id,
@@ -347,21 +363,17 @@ export class DemoLlmClient {
             };
             // Send the response back through the WebSocket.
             ws.send(JSON.stringify(res));
-
           }
-
         }
       }
-
     } catch (err) {
       // Log any errors encountered during the API request.
       console.error("Error in gpt stream: ", err);
     } finally {
-
-      if(funcCall) {
+      if (funcCall) {
         console.log("Function call: ", funcCall);
         const result = await callFunction(funcCall);
-        console.log("Function call result: ", result);
+        console.log("Function call result: ", JSON.stringify(result));
 
         // Prepare the response object with the content received from the API.
         const res: RetellResponse = {
@@ -372,8 +384,7 @@ export class DemoLlmClient {
         };
         // Send the response back through the WebSocket.
         ws.send(JSON.stringify(res));
-
-      } else{
+      } else {
         // After the loop, print the complete message.
         console.log("LLM said:", completeMessage);
 
@@ -386,8 +397,6 @@ export class DemoLlmClient {
         };
         ws.send(JSON.stringify(res));
       }
-
-
     }
   }
 }

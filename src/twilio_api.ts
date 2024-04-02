@@ -48,7 +48,7 @@ export class TwilioClient {
       const phoneNumberObjects = await this.twilio.incomingPhoneNumbers.list();
       const webhookUrl = `${process.env.NGROK_IP_ADDRESS}/twilio-voice-webhook/${agentId}`;
       let numberSid;
-      
+
       for (const phoneNumberObject of phoneNumberObjects) {
         if (phoneNumberObject.phoneNumber === number) {
           numberSid = phoneNumberObject.sid;
@@ -64,7 +64,9 @@ export class TwilioClient {
         voiceUrl: webhookUrl,
         voiceMethod: "POST",
       });
-      console.log(`Successfully updated the phone number ${number} (SID: ${numberSid}) to use agent ID: ${agentId}. The voice URL is now: ${webhookUrl}`);
+      console.log(
+        `Successfully updated the phone number ${number} (SID: ${numberSid}) to use agent ID: ${agentId}. The voice URL is now: ${webhookUrl}`,
+      );
     } catch (error: any) {
       console.error("failer to retrieve caller information: ", error);
     }
@@ -139,11 +141,49 @@ export class TwilioClient {
             return;
           }
 
+          // Initiating a call registration with Retell AI
+          // agentId: Unique identifier for the agent handling the call
+          // audioWebsocketProtocol: Specifies the protocol for the audio websocket connection.
+          // Here, it's set to Twilio's protocol, indicating the audio data will be formatted according to Twilio's specifications.
+          // audioEncoding: The audio encoding format. Mulaw is a common telephony encoding that's used here.
+          // sampleRate: The sample rate of the audio in Hz. 8000 Hz is a common sample rate for telephone audio.
+          // Additional options that can be toggled on or off by uncommenting:
+          // opt_out_sensitive_data_storage: Boolean to disable transcripts and recordings storage for enhanced privacy.
+          // llm_websocket_url: The URL for establishing LLM websocket for getting response, usually your server.
+          // agent_name: The name of the agent, used for your own reference.
+          // voice_id: Unique voice id used for the agent.
+          // voice_temperature: Controls how stable the voice is, ranging from [0,2].
+          // voice_speed: Controls the speed of the voice, ranging from [0.5,2].
+          // responsiveness: Controls how responsive the agent is, ranging from [0,1].
+          // enable_backchannel: Boolean to control whether the agent would backchannel.
+          // ambient_sound: Adds ambient environment sound to the call.
+          // language: Specifies the agent's operational language.
+          // webhook_url: The webhook for the agent to listen to call events.
+          // boosted_keywords: A list of keywords to bias the transcriber model.
+          // format_text: Boolean to format the transcribed text with inverse text normalization.
+          // retell_llm_dynamic_variables: Object to define dynamic variables for the call, allowing for customization of the call flow based on these variables.
           const callResponse = await this.retellClient.registerCall({
-            agentId: agentId,
-            audioWebsocketProtocol: AudioWebsocketProtocol.Twilio,
-            audioEncoding: AudioEncoding.Mulaw,
-            sampleRate: 8000,
+            agentId: agentId, // Unique ID of the agent involved in the call
+            audioWebsocketProtocol: AudioWebsocketProtocol.Twilio, // Using Twilio's websocket protocol
+            audioEncoding: AudioEncoding.Mulaw, // Audio encoding set to Mulaw, suitable for telephony
+            sampleRate: 8000, // Sample rate set to 8000 Hz, standard for phone calls
+            // opt_out_sensitive_data_storage: false,
+            // llm_websocket_url: "wss://your-websocket-endpoint",
+            // agent_name: "Agent Name",
+            // voice_id: "voiceId",
+            // voice_temperature: 1,
+            // voice_speed: 1,
+            // responsiveness: 1,
+            // enable_backchannel: false,
+            // ambient_sound: "coffee-shop",
+            // language: "en-US",
+            // webhook_url: "https://webhook-url-here",
+            // boosted_keywords: ["keyword1", "keyword2"],
+            // format_text: true,
+            // retell_llm_dynamic_variables: {
+            //   customer_name: "John Doe",
+            //   appointment_type: "annual checkup",
+            // },
           });
           if (callResponse.callDetail) {
             // Start phone call websocket
